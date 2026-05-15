@@ -567,14 +567,16 @@ function doExport(){
   const aoa=[headers];
   S.rows.forEach(r=>{
     const seqNum=r.nf?seqMap[r.nf]:freeSeq++;
+    // Use undefined (not null) for empty cells — xlsx writes null as "null" text
+    const _n=undefined;
     aoa.push([
-      null,null,r.dt||null,r.nf||null,null,null,
-      r.t,r.cli||null,null,r.conta||null,null,null,
-      r.dt||null,null,null,null,
-      r.pid,r.texto||null,null,null,null,null,null,
+      _n,_n,r.dt||_n,r.nf||_n,_n,_n,
+      r.t,r.cli||_n,_n,r.conta||_n,_n,_n,
+      r.dt||_n,_n,_n,_n,
+      r.pid,r.texto||_n,_n,_n,_n,_n,_n,
       r.v,seqNum,
-      (r.cteVal!=null&&r.cteVal!==0)?r.cteVal:null,
-      r.cteNum?parseInt(r.cteNum)||null:null
+      (r.cteVal!=null&&r.cteVal!==0)?r.cteVal:_n,
+      r.cteNum?parseInt(r.cteNum)||_n:_n
     ]);
   });
 
