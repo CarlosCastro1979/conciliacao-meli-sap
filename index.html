@@ -207,11 +207,11 @@ function loadFile(type,inp){
       document.getElementById('c-'+type).classList.add('ok');
       document.getElementById('bs-'+type).textContent='OK';
       document.getElementById('rw-'+type).textContent=data.length+' registos';
-      if(allOk())document.getElementById('btnP').disabled=false;
+      checkReady();
     }catch(err){
       document.getElementById('c-'+type).classList.add('err');
       document.getElementById('bs-'+type).textContent='ERRO';
-      document.getElementById('errs1').innerHTML+=`<div class="alert al-e">✖ ${err.message}</div>`;
+      document.getElementById('errBox').innerHTML='<div class="alert al-e">✖ '+err.message+'</div>';document.getElementById('errBox').style.display='block';
     }
   };
   rd.readAsArrayBuffer(file);
