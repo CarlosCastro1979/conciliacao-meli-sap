@@ -253,19 +253,22 @@ function runProcess(){
   log(`  → ${Object.keys(cteIdx).length} CTes`,'ok');prog(30);
 
   // KONCILI INDEX — usa VALOR_PREVISTO, acumula vpTotal por NF inteiroprog(35);
-  const kIdx={},kPags=new Set(),devNfs=new Set();
+  const kIdx={},kPags=new Set(),devKon={};
   for(const r of S.kon){
     const nf=parseInt(r['NUM_NF']||0);if(!nf)continue;
     const tp=String(r['TP_LANCAMENTO']||'');
     const tpL=tp.toLowerCase();
-    // Detectar devoluções
-    if(tpL.includes('estorno de venda')||tpL.includes('bloqueio de reserva de valor disputado')){
-      devNfs.add(nf); continue;
-    }
-    if(!kIdx[nf])kIdx[nf]={vpTotal:0,groups:{}};
     const vp=pa(r['VALOR_PREVISTO']||0);
     const pag=String(r['PAGAMENTOS']||'');
     const validPag=pag&&!['nan','null','undefined','NaN'].includes(pag);
+    // Detectar devoluções — guardar dados mas não processar no fluxo normal
+    if(tpL.includes('estorno de venda')||tpL.includes('bloqueio de reserva de valor disputado')){
+      if(!devKon[nf])devKon[nf]={rows:[],pags:new Set()};
+      devKon[nf].rows.push({tp,vp,pag:validPag?pag:'',dt:convDate(r['DATA_REPASSE']||r['DATA_PAGAMENTO']||'')});
+      if(validPag)devKon[nf].pags.add(pag);
+      continue;
+    }
+    if(!kIdx[nf])kIdx[nf]={vpTotal:0,groups:{}};
     if(validPag)kPags.add(pag);
     kIdx[nf].vpTotal+=vp;
     if(validPag){
@@ -363,14 +366,40 @@ function runProcess(){
     S.rows.push(...nfRows);
   }
 
-  // DEVOLUÇÕES — NFs marcadas no Koncili
+  // DEVOLUÇÕES — montar linhas com toda a informação disponível
   S.devRows=[];
-  for(const nf of [...devNfs].sort((a,b)=>a-b)){
+  for(const nf of Object.keys(devKon).map(Number).sort((a,b)=>a-b)){
     const sapV=sapIdx[nf]!=null?+(sapIdx[nf].toFixed(2)):null;
     const cte=cteIdx[nf];
     const cteVal=cte?cte.value:0;
     const cteNum=cte?cte.numero:'';
-    S.devRows.push({nf,sapV,cteVal,cteNum});
+    const forn=cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935;
+    const konRows=devKon[nf].rows;
+    const pags=[...devKon[nf].pags];
+    // Data: usar a primeira data disponível no Koncili
+    const dt=konRows.find(r=>r.dt)?.dt||'';
+    // Valor Meli por reference_id
+    for(const pid of (pags.length?pags:[''])){
+      const mAmt=pid&&mIdx[pid]?+(mIdx[pid].amount.toFixed(2)):null;
+      const mDt=pid&&mIdx[pid]?mIdx[pid].date:dt;
+      // Comissão Koncili (soma dos lançamentos de comissão nesta devolução)
+      const kom=+(konRows.filter(r=>r.tp.toLowerCase().includes('comiss')).reduce((s,r)=>s+Math.abs(r.vp),0).toFixed(2));
+      // Linha S — crédito Meli (se houver pagamento)
+      if(mAmt!=null&&mAmt>0.009)
+        S.devRows.push({t:'S',nf,pid,texto:`BX MELI DEV NF ${nf} REF ${mDt}`,v:mAmt,conta:'1101010904',cli:null,cteVal,cteNum,forn:null,sub:'venda',dt:mDt,dev:true});
+      // Linha D — débito SAP (a vermelho = deixar em branco se não tiver SAP)
+      S.devRows.push({t:'D',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt:mDt||dt,dev:true});
+      // Linha K Comissão
+      if(kom>0)
+        S.devRows.push({t:'K',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf} REF COMISSÃO`,v:kom,conta:null,cli:null,cteVal,cteNum,forn:null,sub:'comissao',dt:mDt||dt,dev:true});
+      // Linha K Frete (CTE)
+      if(cteVal>0)
+        S.devRows.push({t:'K',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf} REF FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,forn,sub:'frete',dt:mDt||dt,dev:true});
+    }
+    // Se não há nenhum PID, pelo menos a linha D
+    if(!pags.length){
+      S.devRows.push({t:'D',nf,pid:'',texto:`BX MELI DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt,dev:true});
+    }
   }
 
 }
@@ -530,22 +559,35 @@ function doExport(){
     rowIdx++;
   });
 
-  // DEVOLUÇÕES sheet
+  // DEVOLUÇÕES sheet — mesma estrutura do UPLOAD SAP, com tudo preenchido
   if(S.devRows&&S.devRows.length>0){
+    const devSeqMap={};let devSeq=1;
+    const devNfOrder=[...new Set(S.devRows.filter(r=>r.nf).map(r=>r.nf))].sort((a,b)=>a-b);
+    for(const nf of devNfOrder) devSeqMap[nf]=devSeq++;
     const devAoa=[headers];
     S.devRows.forEach(r=>{
       devAoa.push([
-        '','','',r.nf||'','','',
-        '','','','','','',
-        '','','','',
-        '','','','','','','',
-        r.sapV!=null?-Math.abs(r.sapV):'','',
-        r.cteVal||'',
+        '','',r.dt||'',r.nf||'','',' ',
+        r.t,r.cli||'',r.sub==='frete'?(r.forn||''):'',r.conta||'','','',
+        r.dt||'','','','',
+        r.pid||'',r.texto||'','','','','','',
+        r.v!=null?r.v:'',
+        devSeqMap[r.nf]||'',
+        (r.cteVal!=null&&r.cteVal!==0)?r.cteVal:'',
         r.cteNum?parseInt(r.cteNum)||'':''
       ]);
     });
     const wsDev=XLSX.utils.aoa_to_sheet(devAoa);
     wsDev['!cols']=ws['!cols'];
+    // Rosa claro para todas as linhas de devoluções
+    const nDevCols=headers.length;
+    for(let ri=1;ri<devAoa.length;ri++){
+      for(let ci=0;ci<nDevCols;ci++){
+        const addr=XLSX.utils.encode_cell({r:ri,c:ci});
+        if(!wsDev[addr])wsDev[addr]={t:'z',v:''};
+        wsDev[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFFE0E0'}}};
+      }
+    }
     XLSX.utils.book_append_sheet(wb,wsDev,'DEVOLUÇÕES');
   }
 
