@@ -592,7 +592,7 @@ function doExport(){
       r.sub==='frete'?(r.forn||''):r.sub==='comissao'?3101009:'',
       r.sub==='frete'?1104040100:r.conta||'','DBSP','',
       r.dt||'','','','',
-      r.pid,r.texto||'','','','','',
+      r.pid,r.texto||'','','','','','',
       r.v!=null&&!isNaN(r.v)?r.v:0
     ]);
   });
@@ -605,7 +605,7 @@ function doExport(){
         yr||'','AB',r.dt||'','','','',
         r.t,r.cli||'','',r.conta||'','DBSP','',
         r.dt||'','','','',
-        r.pid,'','','','','',
+        r.pid,'','','','','','',
         r.v
       ]);
     });
@@ -663,7 +663,7 @@ function doExport(){
         r.sub==='frete'?(r.forn||''):r.sub==='comissao'?3101009:'',
         r.sub==='frete'?1104040100:r.conta||'','DBSP','',
         r.dt||'','','','',
-        r.pid||'',r.texto||'','','','','',
+        r.pid||'',r.texto||'','','','','','',
         r.v!=null?r.v:''
       ]);
     });
