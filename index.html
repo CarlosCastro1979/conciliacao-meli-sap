@@ -34,7 +34,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:10
 .al-e{background:rgba(200,16,46,.1);border:1px solid rgba(200,16,46,.25);color:#ff6680;}
 .al-ok{background:rgba(0,214,143,.08);border:1px solid rgba(0,214,143,.2);color:var(--grn);}
 .al-w{background:rgba(245,166,35,.1);border:1px solid rgba(245,166,35,.25);color:var(--yel);}
-.sc-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px;}
+.sc-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px;}
 .sc{background:var(--sur);border:1px solid var(--brd);border-radius:5px;padding:14px;}
 .sc-val{font-family:var(--mono);font-size:22px;font-weight:600;margin-bottom:3px;}
 .sc-lbl{font-size:10px;color:var(--txt2);}
@@ -284,15 +284,26 @@ function runProcess(){
     const rid=String(r['REFERENCE_ID']||'');if(!rid)continue;
     const amt=pa(r['TRANSACTION_NET_AMOUNT']||0);
     const dt=convDate(r['RELEASE_DATE']||'');
-    if(!mIdx[rid])mIdx[rid]={amount:0,date:dt};
+    const tp=String(r['TRANSACTION_TYPE']||'');
+    if(!mIdx[rid])mIdx[rid]={amount:0,date:dt,type:tp};
     mIdx[rid].amount+=amt;
+    // Keep most recent type (non-Liberação takes priority)
+    if(tp&&tp!=='Liberação de dinheiro')mIdx[rid].type=tp;
   }
   const fPool={};
+  // Special entries: Meli entries NOT in Koncili and NOT "Liberação de dinheiro" positive
+  const specialEntries=[];
+  const SKIP_TYPES=['Liberação de dinheiro'];
   for(const[rid,info]of Object.entries(mIdx)){
-    if(!kPags.has(rid)&&info.amount>0.009)
-      fPool[rid]={amount:+(info.amount.toFixed(2)),date:info.date};
+    if(!kPags.has(rid)){
+      if(info.amount>0.009) fPool[rid]={amount:+(info.amount.toFixed(2)),date:info.date};
+      // Negative or special type entries
+      if(info.type&&!SKIP_TYPES.includes(info.type)){
+        specialEntries.push({pid:rid,v:+(info.amount.toFixed(2)),dt:info.date,tipo:info.type});
+      }
+    }
   }
-  log(`  → ${Object.keys(mIdx).length} refs | ${Object.keys(fPool).length} créditos livres`,'ok');prog(60);
+  log(`  → ${Object.keys(mIdx).length} refs | ${Object.keys(fPool).length} créditos livres | ${specialEntries.length} entradas especiais`,'ok');prog(60);
 
   // GENERATE ROWS
   // Formula: frete_livre = vpTotal − meli_amt (ex: 103.88 − 85.89 = 17.99)
@@ -330,20 +341,20 @@ function runProcess(){
         for(const pp of pidParts){
           const ppAmt=mIdx[pp]?+(mIdx[pp].amount.toFixed(2)):0;
           const ppDt=mIdx[pp]?mIdx[pp].date:mDt;
-          nfRows.push({t:'S',nf,pid:pp,texto:`BX MELI NF ${nf} REF ${ppDt}`,v:ppAmt,conta:'1101010904',cli:null,cteVal,cteNum,sub:'venda',dt:ppDt,adj:false});
+          nfRows.push({t:'S',nf,pid:pp,texto:`BX MELI  NF ${nf} REF ${ppDt}`,v:ppAmt,conta:'1101010904',cli:null,cteVal,cteNum,sub:'venda',dt:ppDt,adj:false});
         }
       }else{
-        nfRows.push({t:'S',nf,pid,texto:`BX MELI NF ${nf} REF ${mDt}`,v:mAmt,conta:'1101010904',cli:null,cteVal,cteNum,sub:'venda',dt:mDt,adj:false});
+        nfRows.push({t:'S',nf,pid,texto:`BX MELI  NF ${nf} REF ${mDt}`,v:mAmt,conta:'1101010904',cli:null,cteVal,cteNum,sub:'venda',dt:mDt,adj:false});
       }
-      nfRows.push({t:'D',nf,pid:pidParts[0],texto:`BX MELI NF ${nf}`,v:+(-sapV).toFixed(2),conta:null,cli:'BR00002',cteVal,cteNum,sub:'debito',dt:mDt,adj:false});
-      nfRows.push({t:'K',nf,pid:pidParts[0],texto:`BX MELI NF ${nf} REF COMISSÃO`,v:com,conta:null,cli:null,cteVal,cteNum,sub:'comissao',dt:mDt,adj:false,baseCom:com});
-      nfRows.push({t:'K',nf,pid:pidParts[0],texto:`BX MELI NF ${nf} REF FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,sub:'frete',dt:mDt,adj:false,forn:cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935});
+      nfRows.push({t:'D',nf,pid:pidParts[0],texto:`BX MELI  NF ${nf}`,v:+(-sapV).toFixed(2),conta:null,cli:'BR00002',cteVal,cteNum,sub:'debito',dt:mDt,adj:false});
+      nfRows.push({t:'K',nf,pid:pidParts[0],texto:`BX MELI  NF ${nf} REF COMISSÃO`,v:com,conta:null,cli:null,cteVal,cteNum,sub:'comissao',dt:mDt,adj:false,baseCom:com});
+      nfRows.push({t:'K',nf,pid:pidParts[0],texto:cteNum?`BX MELI  NF ${nf}  FRETE CTE Nº ${cteNum}`:`BX MELI  NF ${nf}  FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,sub:'frete',dt:mDt,adj:false,forn:cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935});
 
       if(freteLivre>0.009){
         const exact=Object.entries(fPool).find(([r,i])=>!usedFree.has(r)&&Math.abs(i.amount-freteLivre)<0.01);
         if(exact){
           const[rid,info]=exact;usedFree.add(rid);freeUsed++;
-          nfRows.push({t:'S',nf,pid:rid,texto:`BX MELI NF ${nf} REF ${info.date}`,v:info.amount,conta:'1101010904',cli:null,cteVal,cteNum,sub:'free',dt:info.date,adj:false});
+          nfRows.push({t:'S',nf,pid:rid,texto:`BX MELI  NF ${nf} REF ${info.date}`,v:info.amount,conta:'1101010904',cli:null,cteVal,cteNum,sub:'free',dt:info.date,adj:false});
         }
       }
     }
@@ -366,6 +377,15 @@ function runProcess(){
     S.rows.push(...nfRows);
   }
 
+  // ENTRADAS ESPECIAIS MELI — linhas com texto a vermelho para completar
+  S.specialRows=[];
+  for(const e of specialEntries){
+    // Linha S positiva (conta 1101010904) — texto a vermelho
+    S.specialRows.push({t:'S',pid:e.pid,texto:'',v:Math.abs(e.v),conta:'1101010904',cli:null,forn:null,dt:e.dt,tipo:e.tipo,special:true,redText:true});
+    // Linha S negativa contrapartida (conta 5101030110)
+    S.specialRows.push({t:'S',pid:e.pid,texto:'',v:-Math.abs(e.v),conta:'5101030110',cli:null,forn:null,dt:e.dt,tipo:e.tipo,special:true,redText:true});
+  }
+
   // DEVOLUÇÕES — montar linhas com toda a informação disponível
   S.devRows=[];
   for(const nf of Object.keys(devKon).map(Number).sort((a,b)=>a-b)){
@@ -386,19 +406,19 @@ function runProcess(){
       const kom=+(konRows.filter(r=>r.tp.toLowerCase().includes('comiss')).reduce((s,r)=>s+Math.abs(r.vp),0).toFixed(2));
       // Linha S — crédito Meli (se houver pagamento)
       if(mAmt!=null&&mAmt>0.009)
-        S.devRows.push({t:'S',nf,pid,texto:`BX MELI DEV NF ${nf} REF ${mDt}`,v:mAmt,conta:'1101010904',cli:null,cteVal,cteNum,forn:null,sub:'venda',dt:mDt,dev:true});
+        S.devRows.push({t:'S',nf,pid,texto:`BX MELI  DEV NF ${nf} REF ${mDt}`,v:mAmt,conta:'1101010904',cli:null,cteVal,cteNum,forn:null,sub:'venda',dt:mDt,dev:true});
       // Linha D — débito SAP (a vermelho = deixar em branco se não tiver SAP)
-      S.devRows.push({t:'D',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt:mDt||dt,dev:true});
+      S.devRows.push({t:'D',nf,pid:pid||'',texto:`BX MELI  DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt:mDt||dt,dev:true});
       // Linha K Comissão
       if(kom>0)
-        S.devRows.push({t:'K',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf} REF COMISSÃO`,v:kom,conta:null,cli:null,cteVal,cteNum,forn:null,sub:'comissao',dt:mDt||dt,dev:true});
+        S.devRows.push({t:'K',nf,pid:pid||'',texto:`BX MELI  DEV NF ${nf} REF COMISSÃO`,v:kom,conta:null,cli:null,cteVal,cteNum,forn:null,sub:'comissao',dt:mDt||dt,dev:true});
       // Linha K Frete (CTE)
       if(cteVal>0)
-        S.devRows.push({t:'K',nf,pid:pid||'',texto:`BX MELI DEV NF ${nf} REF FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,forn,sub:'frete',dt:mDt||dt,dev:true});
+        S.devRows.push({t:'K',nf,pid:pid||'',texto:cteNum?`BX MELI  DEV NF ${nf}  FRETE CTE Nº ${cteNum}`:`BX MELI  DEV NF ${nf}  FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,forn,sub:'frete',dt:mDt||dt,dev:true});
     }
     // Se não há nenhum PID, pelo menos a linha D
     if(!pags.length){
-      S.devRows.push({t:'D',nf,pid:'',texto:`BX MELI DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt,dev:true});
+      S.devRows.push({t:'D',nf,pid:'',texto:`BX MELI  DEV NF ${nf}`,v:sapV!=null?-Math.abs(sapV):null,conta:null,cli:'BR00002',cteVal,cteNum,forn:null,sub:'debito',dt,dev:true});
     }
   }
 
@@ -439,8 +459,9 @@ function buildResults(){
   // Summary cards
   document.getElementById('scGrid').innerHTML=`
     <div class="sc"><div class="sc-val" style="color:var(--grn)">${nfSet.size}</div><div class="sc-lbl">NFs processadas</div></div>
-    <div class="sc"><div class="sc-val" style="color:${S.devRows&&S.devRows.length?'var(--yel)':'var(--txt2)'}">${S.devRows?S.devRows.length:0}</div><div class="sc-lbl">Devoluções (aba sep.)</div></div>
+    <div class="sc"><div class="sc-val" style="color:${S.devRows&&S.devRows.length?'var(--yel)':'var(--txt2)'}">${S.devRows?new Set(S.devRows.filter(r=>r.nf).map(r=>r.nf)).size:0}</div><div class="sc-lbl">Devoluções (aba sep.)</div></div>
     <div class="sc"><div class="sc-val">${freeUsed}</div><div class="sc-lbl">Créditos frete Meli</div></div>
+    <div class="sc"><div class="sc-val" style="color:${S.specialRows&&S.specialRows.length?'var(--yel)':'var(--txt2)'}">${S.specialRows?S.specialRows.length/2:0}</div><div class="sc-lbl">Entradas especiais ✏️</div></div>
     <div class="sc"><div class="sc-val" style="color:${adjCount?'var(--yel)':'var(--grn)'}">${adjCount}</div><div class="sc-lbl">NFs c/ ajuste K-Comissão</div></div>
     <div class="sc"><div class="sc-val" style="color:${adjCount?'var(--yel)':'var(--grn)'}">${totalDiff.toFixed(2)}</div><div class="sc-lbl">Diferença absorvida (R$)</div></div>`;
 
@@ -514,29 +535,66 @@ function doExport(){
   let freeSeq=seq;
 
   const headers=['ID doc contábil','Tipo Doc.','Data Lançam.','Referencia ',
-    'Texto cab','N. Documento','Identificação do Item','Cliente',
+    'Unnamed: 4','N. Documento','Identificação do Item','Cliente',
     'Fornecedor','Conta do Razão','Divisão','Condição de pagamento',
     'data base','Forma de pagamento','Suplemento de pagamento',
     'Bloqueio de pagamento','Atribuição','Texto do item','CTE',
     'banco empresa','Centro de Custo','Centro de Lucro',
-    'Ordem Interna','Valor do item','SEQUENCIAL','VALOR CTE','NUMERO CTE'];
+    'Ordem Interna','Valor do item'];
 
   const aoa=[headers];
   S.rows.forEach(r=>{
     const seqNum=r.nf?seqMap[r.nf]:freeSeq++;
+    const yr=r.dt?r.dt.slice(6):'';
+    const mm=r.dt?r.dt.slice(3,5):'';
+    const ref=yr&&mm?'MELI '+mm+'.'+yr:'';
     aoa.push([
-      '','',r.dt||'',r.nf||'','',' ',
-      r.t,r.cli||'',r.sub==='frete'?(r.forn||''):'',r.conta||'','','',
+      yr||'','AB',r.dt||'',r.nf||'','','',
+      r.t,r.cli||'',
+      r.sub==='frete'?(r.forn||''):r.sub==='comissao'?3101009:'',
+      r.sub==='frete'?1104040100:r.conta||'','DBSP','',
       r.dt||'','','','',
-      r.pid,r.texto||'','','','','','',
-      r.v,seqNum,
-      (r.cteVal!=null&&r.cteVal!==0)?r.cteVal:'',
-      r.cteNum?parseInt(r.cteNum)||'':''
+      r.pid,r.texto||'','','','','',
+      r.v
     ]);
   });
 
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:12},{wch:8},{wch:10},{wch:10},{wch:10},{wch:12},{wch:6},{wch:10},{wch:10},{wch:14},{wch:8},{wch:10},{wch:10},{wch:10},{wch:10},{wch:10},{wch:16},{wch:38},{wch:8},{wch:12},{wch:12},{wch:12},{wch:12},{wch:13},{wch:10},{wch:10},{wch:12}];
+  ws['!cols']=[{wch:8},{wch:6},{wch:10},{wch:10},{wch:6},{wch:10},{wch:6},{wch:10},{wch:10},{wch:14},{wch:6},{wch:8},{wch:10},{wch:8},{wch:8},{wch:8},{wch:16},{wch:42},{wch:6},{wch:10},{wch:10},{wch:10},{wch:10},{wch:13}];
+
+  // Append special Meli entries (text cell in red)
+  if(S.specialRows&&S.specialRows.length>0){
+    S.specialRows.forEach(r=>{
+      const yr=r.dt?r.dt.slice(6):'';
+      const mm=r.dt?r.dt.slice(3,5):'';
+      aoa.push([
+        yr||'','AB',r.dt||'','','','',
+        r.t,r.cli||'','',r.conta||'','DBSP','',
+        r.dt||'','','','',
+        r.pid,'','','','','',
+        r.v
+      ]);
+    });
+    // Re-build worksheet with special rows included
+    const ws2=XLSX.utils.aoa_to_sheet(aoa);
+    ws2['!cols']=ws['!cols'];
+    // Copy cell styles from ws to ws2 for existing rows
+    Object.keys(ws).filter(k=>k[0]!=='!').forEach(addr=>{
+      if(ws[addr])ws2[addr]=ws[addr];
+    });
+    // Red fill on Texto column (col 17, index 17) for special rows
+    const specialStart=1+S.rows.length;
+    for(let si=0;si<S.specialRows.length;si++){
+      const ri=specialStart+si;
+      const addr=XLSX.utils.encode_cell({r:ri,c:17});
+      if(!ws2[addr])ws2[addr]={t:'z',v:''};
+      ws2[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFF0000'}},
+                   font:{color:{rgb:'FFFFFFFF'},bold:true}};
+    }
+    // Replace ws with ws2
+    Object.assign(ws,ws2);
+    wb.Sheets['UPLOAD SAP']=ws;
+  }
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'UPLOAD SAP');
 
@@ -566,15 +624,16 @@ function doExport(){
     for(const nf of devNfOrder) devSeqMap[nf]=devSeq++;
     const devAoa=[headers];
     S.devRows.forEach(r=>{
+      const dyr=r.dt?r.dt.slice(6):'';
+      const dmm=r.dt?r.dt.slice(3,5):'';
       devAoa.push([
-        '','',r.dt||'',r.nf||'','',' ',
-        r.t,r.cli||'',r.sub==='frete'?(r.forn||''):'',r.conta||'','','',
+        dyr||'','AB',r.dt||'',r.nf||'','','',
+        r.t,r.cli||'',
+        r.sub==='frete'?(r.forn||''):r.sub==='comissao'?3101009:'',
+        r.sub==='frete'?1104040100:r.conta||'','DBSP','',
         r.dt||'','','','',
-        r.pid||'',r.texto||'','','','','','',
-        r.v!=null?r.v:'',
-        devSeqMap[r.nf]||'',
-        (r.cteVal!=null&&r.cteVal!==0)?r.cteVal:'',
-        r.cteNum?parseInt(r.cteNum)||'':''
+        r.pid||'',r.texto||'','','','','',
+        r.v!=null?r.v:''
       ]);
     });
     const wsDev=XLSX.utils.aoa_to_sheet(devAoa);
