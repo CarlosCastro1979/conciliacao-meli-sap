@@ -34,7 +34,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:10
 .al-e{background:rgba(200,16,46,.1);border:1px solid rgba(200,16,46,.25);color:#ff6680;}
 .al-ok{background:rgba(0,214,143,.08);border:1px solid rgba(0,214,143,.2);color:var(--grn);}
 .al-w{background:rgba(245,166,35,.1);border:1px solid rgba(245,166,35,.25);color:var(--yel);}
-.sc-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px;}
+.sc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:20px;}
 .sc{background:var(--sur);border:1px solid var(--brd);border-radius:5px;padding:14px;}
 .sc-val{font-family:var(--mono);font-size:22px;font-weight:600;margin-bottom:3px;}
 .sc-lbl{font-size:10px;color:var(--txt2);}
@@ -180,8 +180,28 @@ function pa(v){
 }
 function convDate(d){
   if(!d)return '';
-  const p=String(d).split('-');
-  return p.length===3?`${p[0]}.${p[1]}.${p[2].slice(-2)}`:String(d);
+  // Handle JS Date objects (from XLSX parsing)
+  if(d instanceof Date){
+    const dd=String(d.getDate()).padStart(2,'0');
+    const mm=String(d.getMonth()+1).padStart(2,'0');
+    const yy=String(d.getFullYear()).slice(-2);
+    return `${dd}.${mm}.${yy}`;
+  }
+  const s=String(d).trim();
+  // YYYY-MM-DD
+  const p=s.split('-');
+  if(p.length===3&&p[0].length===4)return `${p[2].slice(0,2)}.${p[1]}.${p[0].slice(-2)}`;
+  // DD.MM.YY or DD.MM.YYYY already
+  if(s.match(/^\d{2}\.\d{2}\.\d{2,4}$/))return s.slice(0,8).replace(/(\d{2}\.\d{2}\.\d{2})\d{2}?/,'$1');
+  // Fallback: try parsing
+  const dt=new Date(s);
+  if(!isNaN(dt)){
+    const dd=String(dt.getDate()).padStart(2,'0');
+    const mm=String(dt.getMonth()+1).padStart(2,'0');
+    const yy=String(dt.getFullYear()).slice(-2);
+    return `${dd}.${mm}.${yy}`;
+  }
+  return s;
 }
 
 function loadFile(type,inp){
@@ -285,11 +305,13 @@ function runProcess(){
     const amt=pa(r['TRANSACTION_NET_AMOUNT']||0);
     const dt=convDate(r['RELEASE_DATE']||'');
     const tp=String(r['TRANSACTION_TYPE']||'');
-    if(!mIdx[rid])mIdx[rid]={amount:0,date:dt,type:tp};
+    const isLib=tp==='Liberação de dinheiro';
+    if(!mIdx[rid])mIdx[rid]={amount:0,date:dt,type:tp,isLib};
     mIdx[rid].amount+=amt;
     // Keep most recent type (non-Liberação takes priority)
     if(tp&&tp!=='Liberação de dinheiro')mIdx[rid].type=tp;
   }
+  S._melIdx=mIdx;
   const fPool={};
   // Special entries: Meli entries NOT in Koncili and NOT "Liberação de dinheiro" positive
   const specialEntries=[];
@@ -380,6 +402,7 @@ function runProcess(){
   // ENTRADAS ESPECIAIS MELI — linhas com texto a vermelho para completar
   S.specialRows=[];
   for(const e of specialEntries){
+    if(Math.abs(e.v)<0.005)continue; // ignorar entradas a zero
     // Linha S positiva (conta 1101010904) — texto a vermelho
     S.specialRows.push({t:'S',pid:e.pid,texto:'',v:Math.abs(e.v),conta:'1101010904',cli:null,forn:null,dt:e.dt,tipo:e.tipo,special:true,redText:true});
     // Linha S negativa contrapartida (conta 5101030110)
@@ -456,14 +479,32 @@ function buildResults(){
   const adjCount=S.adjList.length;
   const totalDiff=+S.adjList.reduce((s,a)=>s+Math.abs(a.diff),0).toFixed(2);
 
-  // Summary cards
+  // Balance check — grand total S+K+D must = 0
+  const totalS=+(S.rows.filter(r=>r.t==='S').reduce((s,r)=>s+r.v,0).toFixed(2));
+  const totalK=+(S.rows.filter(r=>r.t==='K').reduce((s,r)=>s+r.v,0).toFixed(2));
+  const totalD=+(S.rows.filter(r=>r.t==='D').reduce((s,r)=>s+r.v,0).toFixed(2));
+  const grandTotal=+(totalS+totalK+totalD).toFixed(2);
+  const balOk=Math.abs(grandTotal)<0.05;
+
+  // Meli check — S conta 1101010904 must = total Liberações from Meli extrato
+  const totalSConta=+(S.rows.filter(r=>r.t==='S'&&r.conta==='1101010904').reduce((s,r)=>s+r.v,0).toFixed(2));
+  const totalMeliLib=+(Object.entries(S._melIdx||{}).filter(([,i])=>i.isLib).reduce((s,[,i])=>s+i.amount,0).toFixed(2));
+  const meliDiff=+(totalMeliLib-totalSConta).toFixed(2);
+  const meliOk=Math.abs(meliDiff)<0.05;
+
   document.getElementById('scGrid').innerHTML=`
     <div class="sc"><div class="sc-val" style="color:var(--grn)">${nfSet.size}</div><div class="sc-lbl">NFs processadas</div></div>
     <div class="sc"><div class="sc-val" style="color:${S.devRows&&S.devRows.length?'var(--yel)':'var(--txt2)'}">${S.devRows?new Set(S.devRows.filter(r=>r.nf).map(r=>r.nf)).size:0}</div><div class="sc-lbl">Devoluções (aba sep.)</div></div>
     <div class="sc"><div class="sc-val">${freeUsed}</div><div class="sc-lbl">Créditos frete Meli</div></div>
     <div class="sc"><div class="sc-val" style="color:${S.specialRows&&S.specialRows.length?'var(--yel)':'var(--txt2)'}">${S.specialRows?S.specialRows.length/2:0}</div><div class="sc-lbl">Entradas especiais ✏️</div></div>
-    <div class="sc"><div class="sc-val" style="color:${adjCount?'var(--yel)':'var(--grn)'}">${adjCount}</div><div class="sc-lbl">NFs c/ ajuste K-Comissão</div></div>
-    <div class="sc"><div class="sc-val" style="color:${adjCount?'var(--yel)':'var(--grn)'}">${totalDiff.toFixed(2)}</div><div class="sc-lbl">Diferença absorvida (R$)</div></div>`;
+    <div class="sc" style="border-color:${balOk?'var(--grn)':'var(--red)'}">
+      <div class="sc-val" style="color:${balOk?'var(--grn)':'var(--red)'}">${grandTotal.toFixed(2)}</div>
+      <div class="sc-lbl">${balOk?'✔ Saldo ZERO':'✖ Saldo aberto'}</div>
+    </div>
+    <div class="sc" style="border-color:${meliOk?'var(--grn)':'var(--red)'}">
+      <div class="sc-val" style="color:${meliOk?'var(--grn)':'var(--red)'}; font-size:16px">${meliOk?'✔':meliDiff>0?'−'+meliDiff.toFixed(2):'+'+Math.abs(meliDiff).toFixed(2)}</div>
+      <div class="sc-lbl">S vs Meli Lib.<br><span style="font-size:9px;color:var(--txt2)">${totalSConta.toFixed(2)} / ${totalMeliLib.toFixed(2)}</span></div>
+    </div>`;
 
   // Failed NFs
   const failedHtml = S.failedNFs && S.failedNFs.length>0
