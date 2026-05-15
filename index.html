@@ -159,6 +159,9 @@ return XLSXStyleObj;
 </script>
 <script>
 const S={sap:null,kon:null,mel:null,cte:null,rows:[],adjList:[],_sapIdx:{}};
+// Stub no-op functions (UI removed but called from processing logic)
+function log(){}
+function prog(){}
 
 function allOk(){return S.sap&&S.kon&&S.mel&&S.cte;}
 function checkReady(){
