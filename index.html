@@ -559,14 +559,10 @@ function doExport(){
     ]);
   });
 
-  const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:8},{wch:6},{wch:10},{wch:10},{wch:6},{wch:10},{wch:6},{wch:10},{wch:10},{wch:14},{wch:6},{wch:8},{wch:10},{wch:8},{wch:8},{wch:8},{wch:16},{wch:42},{wch:6},{wch:10},{wch:10},{wch:10},{wch:10},{wch:13}];
-
-  // Append special Meli entries (text cell in red)
+  // Append special Meli entries to aoa before building worksheet
   if(S.specialRows&&S.specialRows.length>0){
     S.specialRows.forEach(r=>{
       const yr=r.dt?r.dt.slice(6):'';
-      const mm=r.dt?r.dt.slice(3,5):'';
       aoa.push([
         yr||'','AB',r.dt||'','','','',
         r.t,r.cli||'','',r.conta||'','DBSP','',
@@ -575,26 +571,23 @@ function doExport(){
         r.v
       ]);
     });
-    // Re-build worksheet with special rows included
-    const ws2=XLSX.utils.aoa_to_sheet(aoa);
-    ws2['!cols']=ws['!cols'];
-    // Copy cell styles from ws to ws2 for existing rows
-    Object.keys(ws).filter(k=>k[0]!=='!').forEach(addr=>{
-      if(ws[addr])ws2[addr]=ws[addr];
-    });
-    // Red fill on Texto column (col 17, index 17) for special rows
+  }
+
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:8},{wch:6},{wch:10},{wch:10},{wch:6},{wch:10},{wch:6},{wch:10},{wch:10},{wch:14},{wch:6},{wch:8},{wch:10},{wch:8},{wch:8},{wch:8},{wch:16},{wch:42},{wch:6},{wch:10},{wch:10},{wch:10},{wch:10},{wch:13}];
+
+  // Red fill on Texto column (col 17) for special rows
+  if(S.specialRows&&S.specialRows.length>0){
     const specialStart=1+S.rows.length;
     for(let si=0;si<S.specialRows.length;si++){
       const ri=specialStart+si;
       const addr=XLSX.utils.encode_cell({r:ri,c:17});
-      if(!ws2[addr])ws2[addr]={t:'z',v:''};
-      ws2[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFF0000'}},
-                   font:{color:{rgb:'FFFFFFFF'},bold:true}};
+      if(!ws[addr])ws[addr]={t:'z',v:''};
+      ws[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFF0000'}},
+                  font:{color:{rgb:'FFFFFFFF'},bold:true}};
     }
-    // Replace ws with ws2
-    Object.assign(ws,ws2);
-    wb.Sheets['UPLOAD SAP']=ws;
   }
+
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'UPLOAD SAP');
 
