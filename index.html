@@ -382,26 +382,25 @@ function runProcess(){
     const gap=+((-partial).toFixed(2));
     if(Math.abs(gap)>0.009){
       const comRow=nfRows.find(r=>r.sub==='comissao');
-      if(comRow){
-        const orig=comRow.v;
-        comRow.v=+(orig+gap).toFixed(2);
+      const freteRow=nfRows.find(r=>r.sub==='frete');
+      const hasCte=freteRow&&freteRow.v>0.009;
+      if(hasCte&&comRow){
+        // CTE exists: absorb gap into K-comissão (normal — comissão may be larger than Koncili)
+        comRow.v=+(comRow.v+gap).toFixed(2);
         comRow.adj=true;
-        adjCount++;
-        S.adjList.push({nf,cteVal,origCom:orig,adjCom:comRow.v,diff:+gap.toFixed(2)});
+      } else {
+        // No CTE or no comRow: show red gap line for portal lookup
+        const mDt=nfRows.find(r=>r.dt)?.dt||'';
+        const mPid=nfRows.find(r=>r.pid)?.pid||'';
+        nfRows.push({t:'S',nf,pid:mPid,
+          texto:`⚠ NF ${nf} — DIFERENÇA A CONSULTAR NO PORTAL MELI`,
+          v:gap,conta:'1101010904',cli:null,sub:'gap',dt:mDt,
+          adj:false,_isGap:true});
       }
     }
     // Track if no Meli payment found for this NF
     const hasPayment=nfRows.some(r=>r.sub==='venda'&&r.v>0);
     if(!hasPayment) S.failedNFs.push({nf,sapVal:+(sapIdx[nf].toFixed(2))});
-    // Check if NF balance closes — if not, add a red gap line
-    const nfSum=+nfRows.reduce((s,r)=>s+(r.v||0),0).toFixed(2);
-    if(Math.abs(nfSum)>0.009){
-      nfRows.push({t:'S',nf,pid:nfRows[0]?.pid||'',
-        texto:`⚠ NF ${nf} — DIFERENÇA A CONSULTAR NO PORTAL MELI`,
-        v:+(-nfSum).toFixed(2),
-        conta:'1101010904',cli:null,sub:'gap',dt:nfRows[0]?.dt||'',
-        adj:false,_isGap:true});
-    }
     S.rows.push(...nfRows);
   }
 
