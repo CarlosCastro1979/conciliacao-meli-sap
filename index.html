@@ -393,6 +393,15 @@ function runProcess(){
     // Track if no Meli payment found for this NF
     const hasPayment=nfRows.some(r=>r.sub==='venda'&&r.v>0);
     if(!hasPayment) S.failedNFs.push({nf,sapVal:+(sapIdx[nf].toFixed(2))});
+    // Check if NF balance closes — if not, add a red gap line
+    const nfSum=+nfRows.reduce((s,r)=>s+(r.v||0),0).toFixed(2);
+    if(Math.abs(nfSum)>0.009){
+      nfRows.push({t:'S',nf,pid:nfRows[0]?.pid||'',
+        texto:`⚠ NF ${nf} — DIFERENÇA A CONSULTAR NO PORTAL MELI`,
+        v:+(-nfSum).toFixed(2),
+        conta:'1101010904',cli:null,sub:'gap',dt:nfRows[0]?.dt||'',
+        adj:false,_isGap:true});
+    }
     S.rows.push(...nfRows);
   }
 
@@ -489,11 +498,18 @@ function buildResults(){
   const meliDiff=+(totalMeliLib-totalSConta).toFixed(2);
   const meliOk=Math.abs(meliDiff)<0.05;
 
+  const gapCount=S.rows.filter(r=>r._isGap).length;
+  const gapTotal=+S.rows.filter(r=>r._isGap).reduce((s,r)=>s+Math.abs(r.v),0).toFixed(2);
+
   document.getElementById('scGrid').innerHTML=`
     <div class="sc"><div class="sc-val" style="color:var(--grn)">${nfSet.size}</div><div class="sc-lbl">NFs processadas</div></div>
     <div class="sc"><div class="sc-val" style="color:${S.devRows&&S.devRows.length?'var(--yel)':'var(--txt2)'}">${S.devRows?new Set(S.devRows.filter(r=>r.nf).map(r=>r.nf)).size:0}</div><div class="sc-lbl">Devoluções (aba sep.)</div></div>
     <div class="sc"><div class="sc-val">${freeUsed}</div><div class="sc-lbl">Créditos frete Meli</div></div>
     <div class="sc"><div class="sc-val" style="color:${S.specialRows&&S.specialRows.length?'var(--yel)':'var(--txt2)'}">${S.specialRows?S.specialRows.length/2:0}</div><div class="sc-lbl">Entradas especiais ✏️</div></div>
+    <div class="sc" style="border-color:${gapCount?'var(--red)':'var(--grn)'}">
+      <div class="sc-val" style="color:${gapCount?'var(--red)':'var(--grn)'}">${gapCount}</div>
+      <div class="sc-lbl">NFs c/ dif. ⚠️<br><span style="font-size:9px;color:var(--txt2)">${gapCount?'R$ '+gapTotal.toFixed(2):''}</span></div>
+    </div>
     <div class="sc" style="border-color:${balOk?'var(--grn)':'var(--red)'}">
       <div class="sc-val" style="color:${balOk?'var(--grn)':'var(--red)'}">${grandTotal.toFixed(2)}</div>
       <div class="sc-lbl">${balOk?'✔ Saldo ZERO':'✖ Saldo aberto'}</div>
@@ -616,7 +632,19 @@ function doExport(){
 
   // Red fill on Texto column (col 17) for special rows
   if(S.specialRows&&S.specialRows.length>0){
-    const specialStart=1+S.rows.length;
+    // Style gap rows (NF balance doesn't close) — full row red background
+  const gapRows=[];
+  S.rows.forEach((r,i)=>{if(r._isGap)gapRows.push(i+1);});
+  for(const ri of gapRows){
+    for(let c=0;c<24;c++){
+      const addr=XLSX.utils.encode_cell({r:ri,c});
+      if(!ws[addr])ws[addr]={t:'z',v:''};
+      ws[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFF0000'}},
+                  font:{color:{rgb:'FFFFFFFF'},bold:true}};
+    }
+  }
+
+  const specialStart=1+S.rows.length;
     for(let si=0;si<S.specialRows.length;si++){
       const ri=specialStart+si;
       const addr=XLSX.utils.encode_cell({r:ri,c:17});
