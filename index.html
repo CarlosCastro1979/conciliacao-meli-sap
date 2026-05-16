@@ -498,7 +498,7 @@ function buildResults(){
   const balOk=Math.abs(grandTotal)<0.05;
 
   // Meli check — S conta 1101010904 must = total Liberações from Meli extrato
-  const totalSConta=+(S.rows.filter(r=>r.t==='S'&&r.conta==='1101010904').reduce((s,r)=>s+r.v,0).toFixed(2));
+  const totalSConta=+(S.rows.filter(r=>r.t==='S'&&r.conta==='1101010904'&&!r._isGap).reduce((s,r)=>s+r.v,0).toFixed(2));
   const totalMeliLib=+(Object.entries(S._melIdx||{}).filter(([,i])=>i.isLib).reduce((s,[,i])=>s+i.amount,0).toFixed(2));
   const meliDiff=+(totalMeliLib-totalSConta).toFixed(2);
   const meliOk=Math.abs(meliDiff)<0.05;
