@@ -423,8 +423,9 @@ function runProcess(){
     const sapV=sapIdx[nf]!=null?+(sapIdx[nf].toFixed(2)):null;
     const cteRaw=cteIdx[nf];
     const freteKon=+(( kIdx[nf]?.freteKon||0).toFixed(2));
-    // If CTE report has this NF use it; otherwise fall back to Koncili Frete value
-    const cteVal=cteRaw?.value>0.009 ? +(cteRaw.value.toFixed(2)) : freteKon;
+    // Only use CTE value if it comes from the CTE report (with a CTE number)
+    // freteKon from Koncili is NOT a reliable substitute — real CTE value needs portal lookup
+    const cteVal=cteRaw?.value>0.009 ? +(cteRaw.value.toFixed(2)) : 0;
     const cteNum=cteRaw?.numero||'';
     const forn=cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935;
     const konRows=devKon[nf].rows;
