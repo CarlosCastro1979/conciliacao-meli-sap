@@ -348,8 +348,9 @@ function runProcess(){
     const sapV   =+(sapIdx[nf].toFixed(2));
     const konc   =kIdx[nf];
     const cte    =cteIdx[nf];
-    const cteVal =cte?cte.value:0;
-    const cteNum =cte?cte.numero:'';
+    const cteVal =cte?.value>0.009?+(cte.value.toFixed(2)):0;
+    const cteNum =cte?.numero||'';
+    const forn   =cte?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
     const vpTotal=+((konc.vpTotal).toFixed(2));
     const groups =Object.entries(konc.groups);
     if(!groups.length)continue;
@@ -436,6 +437,7 @@ function runProcess(){
     // freteKon from Koncili is NOT a reliable substitute — real CTE value needs portal lookup
     const cteVal=cteRaw?.value>0.009 ? +(cteRaw.value.toFixed(2)) : 0;
     const cteNum=cteRaw?.numero||'';
+    const forn=cteRaw?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
     const forn=cteRaw?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
     const konRows=devKon[nf].rows;
     const pags=[...devKon[nf].pags];
