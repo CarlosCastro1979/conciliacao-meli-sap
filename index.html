@@ -273,12 +273,25 @@ async function sbFetch(path,method,body){
 }
 
 let CNPJ_FORN_DB={};
+let PADROES_NF={};  // nf → pattern data
+let FPOOL_DB={};    // reference_id → nf
+
 async function loadCnpjForn(){
   try{
     const rows=await sbFetch('meli_cnpj_forn?select=cnpj,fornecedor_sap');
     rows.forEach(r=>{CNPJ_FORN_DB[r.cnpj]=r.fornecedor_sap;});
     console.log('CNPJ map loaded: '+Object.keys(CNPJ_FORN_DB).length+' entries');
   }catch(e){console.warn('CNPJ load failed:',e);}
+  try{
+    const rows=await sbFetch('meli_padroes_nf?select=nf,cte_numero,cte_valor,fornecedor_sap,cnpj_emissor&order=aprendido_em.desc&limit=5000');
+    rows.forEach(r=>{if(!PADROES_NF[r.nf])PADROES_NF[r.nf]=r;});
+    console.log('NF patterns loaded: '+Object.keys(PADROES_NF).length);
+  }catch(e){console.warn('Padroes load failed:',e);}
+  try{
+    const rows=await sbFetch('meli_fpool_matches?select=reference_id,nf,valor&limit=2000');
+    rows.forEach(r=>{FPOOL_DB[r.reference_id]=r.nf;});
+    console.log('fPool matches loaded: '+Object.keys(FPOOL_DB).length);
+  }catch(e){console.warn('fPool load failed:',e);}
 }
 
 async function gravarPeriodo(inicio,fim,totais){
@@ -347,7 +360,16 @@ function runProcess(){
     cteIdx[nf]={value:cteV,numero:cteN,forn:fornFromCnpj};
   }
 
-  log(`  → ${Object.keys(cteIdx).length} CTes`,'ok');prog(30);
+  // Enrich cteIdx with learned patterns (NFs not in CTE report)
+  for(const [nfStr,padrao] of Object.entries(PADROES_NF||{})){
+    const nf=parseInt(nfStr);
+    if((!cteIdx[nf]||cteIdx[nf].value<0.01)&&padrao.cte_valor>0){
+      const cnpj=padrao.cnpj_emissor||'';
+      const fornFromCnpj=(CNPJ_FORN_DB[cnpj]||CNPJ_FORN[cnpj])||padrao.fornecedor_sap||null;
+      cteIdx[nf]={value:padrao.cte_valor,numero:padrao.cte_numero||'',forn:fornFromCnpj,_fromPadroes:true};
+    }
+  }
+  log(`  → ${Object.keys(cteIdx).length} CTes (incl. padrões aprendidos)`,'ok');prog(30);
 
   // KONCILI INDEX — usa VALOR_PREVISTO, acumula vpTotal por NF inteiroprog(35);
   const kIdx={},kPags=new Set(),devKon={},kPagToNf={};
@@ -598,17 +620,14 @@ async function onSubmitUpload(){
   sb.textContent='A submeter...';
   try{
     const n=await submitUploadSap(file,label);
-    // Learn new CNPJs from uploaded file
-    await learnFromUpload(file);
-    sb.textContent='✅ '+n+' linhas guardadas no histórico!';
+    const learned=await learnFromUpload(file);
+    sb.textContent='✅ '+n+' linhas guardadas. Aprendido: '+learned.cnpjCount+' CNPJs, '+learned.padraoCount+' padrões NF.';
     sb.style.color='var(--grn)';
     setTimeout(()=>{sb.textContent='';sb.style.color='var(--txt2)';},5000);
   }catch(e){sb.textContent='❌ Erro: '+e.message;sb.style.color='var(--red)';}
 }
 
 async function learnFromUpload(file){
-  // Read the uploaded (corrected) file, find K-frete rows with fornecedor filled
-  // Cross with current S.cte to learn CNPJ→fornecedor mappings
   return new Promise((resolve)=>{
     const rd=new FileReader();
     rd.onload=async e=>{
@@ -616,39 +635,120 @@ async function learnFromUpload(file){
         const wb=XLSX.read(e.target.result,{type:'binary'});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const rows=XLSX.utils.sheet_to_json(ws,{defval:null});
-        // Find K-frete rows with fornecedor and CTE number
-        const cteMap={};
+
+        // Build CNPJ map from current CTE report
+        const cteNumToCnpj={};
         if(S&&S.cte){
           S.cte.forEach(r=>{
             const cteN=r['NUMERO_CTE']?String(Math.round(pa(r['NUMERO_CTE']))):null;
             const cnpj=String(r['CNPJ_EMISSOR']||'').replace(/\.0$/,'').trim();
-            if(cteN&&cnpj)cteMap[cteN]=cnpj;
+            if(cteN&&cnpj)cteNumToCnpj[cteN]=cnpj;
           });
         }
-        let learned=0;
+
+        // Group rows by NF
+        const byNf={};
         for(const row of rows){
-          const tipo=row['Identificação do Item'];
-          const forn=row['Fornecedor'];
           const texto=String(row['Texto do item']||'');
-          if(tipo==='K'&&forn&&forn!==3101009){
-            const m=texto.match(/CTE N[ºo°]\s*(\d+)/);
-            if(m){
-              const cteN=m[1];
-              const cnpj=cteMap[cteN];
-              if(cnpj&&!CNPJ_FORN_DB[cnpj]){
-                await aprenderCnpj(cnpj,parseInt(forn),null);
-                learned++;
-              }
+          const m=texto.match(/NF (\d+)/);
+          if(!m)continue;
+          const nf=parseInt(m[1]);
+          if(!byNf[nf])byNf[nf]=[];
+          byNf[nf].push(row);
+        }
+
+        const cnpjLearned={};
+        const padroes=[];
+        let cnpjCount=0, padraoCount=0;
+
+        for(const [nfStr,nfRows] of Object.entries(byNf)){
+          const nf=parseInt(nfStr);
+          const sVenda=nfRows.filter(r=>r['Identificação do Item']==='S'&&r['Conta do Razão']===1101010904).reduce((a,r)=>a+(r['Valor do item']||0),0);
+          const sFreteCteLine=nfRows.find(r=>r['Identificação do Item']==='S'&&r['Conta do Razão']===1104040100);
+          const sFreteCte=sFreteCteLine?sFreteCteLine['Valor do item']||0:0;
+          const kCom=nfRows.filter(r=>r['Identificação do Item']==='K'&&r['Fornecedor']===3101009).reduce((a,r)=>a+(r['Valor do item']||0),0);
+          const kFreteLine=nfRows.find(r=>r['Identificação do Item']==='K'&&r['Fornecedor']!==3101009&&r['Fornecedor']);
+          const kFrete=kFreteLine?kFreteLine['Valor do item']||0:0;
+          const kFreteForn=kFreteLine?kFreteLine['Fornecedor']:null;
+          const dLine=nfRows.find(r=>r['Identificação do Item']==='D');
+          const dVal=dLine?dLine['Valor do item']||0:0;
+
+          // Extract CTE number from K-frete or S-frete text
+          let cteNum=null,cteVal=0,cnpj=null;
+          const freteRow=nfRows.find(r=>(r['Identificação do Item']==='K'||r['Identificação do Item']==='S')&&String(r['Texto do item']||'').includes('CTE'));
+          if(freteRow){
+            const cm=String(freteRow['Texto do item']||'').match(/CTE N[ºo°]\s*(\d+)/);
+            if(cm)cteNum=cm[1];
+            cteVal=Math.abs(kFrete||sFreteCte);
+          }
+          if(cteNum)cnpj=cteNumToCnpj[cteNum]||null;
+
+          // Learn CNPJ → Fornecedor
+          if(cnpj&&kFreteForn&&!CNPJ_FORN_DB[cnpj]&&!cnpjLearned[cnpj]){
+            await aprenderCnpj(cnpj,kFreteForn,null);
+            cnpjLearned[cnpj]=kFreteForn;
+            cnpjCount++;
+          }
+
+          // Save NF pattern
+          padroes.push({
+            nf,cte_numero:cteNum||null,cte_valor:cteVal||null,
+            fornecedor_sap:kFreteForn||null,cnpj_emissor:cnpj||null,
+            s_venda:+sVenda.toFixed(2)||null,
+            s_frete_cte:sFreteCte?+sFreteCte.toFixed(2):null,
+            k_comissao:+kCom.toFixed(2)||null,
+            k_frete:kFrete?+kFrete.toFixed(2):null,
+            d_valor:+dVal.toFixed(2)||null
+          });
+        }
+
+        // Upsert NF patterns in batches of 50
+        for(let i=0;i<padroes.length;i+=50){
+          const batch=padroes.slice(i,i+50);
+          try{
+            await sbFetch('meli_padroes_nf?on_conflict=nf,cte_numero','POST',batch);
+            padraoCount+=batch.length;
+          }catch(e){
+            // Try one by one if batch fails
+            for(const p of batch){
+              try{await sbFetch('meli_padroes_nf','POST',p);padraoCount++;}catch(_){}
             }
           }
         }
-        if(learned>0)console.log('Learned '+learned+' new CNPJ→Fornecedor mappings');
-        resolve(learned);
-      }catch(e){console.warn('learnFromUpload error:',e);resolve(0);}
+
+        // Learn fPool matches: Liberações do Meli com Atribuição que tem uma NF nas linhas S
+        const atribToNf={};
+        for(const row of rows){
+          if(row['Identificação do Item']==='S'){
+            const atrib=String(row['Atribuição']||'');
+            const txt=String(row['Texto do item']||'');
+            const nm=txt.match(/NF (\d+)/);
+            if(atrib&&nm)atribToNf[atrib]=parseInt(nm[1]);
+          }
+        }
+        // Cross with fPool (Meli entries not in Koncili)
+        const fPoolLearned=[];
+        if(S&&S._melIdx){
+          const konPags=new Set(Object.keys(S._melIdx).filter(k=>S._melIdx[k].isLib));
+          for(const [rid,info] of Object.entries(S._melIdx)){
+            if(info.isLib&&atribToNf[rid]&&!Object.keys(S._melIdx).includes(rid)){
+              fPoolLearned.push({reference_id:rid,nf:atribToNf[rid],valor:+info.amount.toFixed(2),tipo:'frete_livre'});
+            }
+          }
+        }
+        if(fPoolLearned.length>0){
+          try{await sbFetch('meli_fpool_matches','POST',fPoolLearned);}catch(_){}
+        }
+
+        const msg=`✅ Aprendido: ${cnpjCount} CNPJs novos, ${padraoCount} padrões NF${fPoolLearned.length?' '+fPoolLearned.length+' fPool':''}`;
+        console.log(msg);
+        resolve({cnpjCount,padraoCount,fPoolCount:fPoolLearned.length});
+      }catch(err){console.warn('learnFromUpload error:',err);resolve({cnpjCount:0,padraoCount:0,fPoolCount:0});}
     };
     rd.readAsBinaryString(file);
   });
 }
+
 
 
 function buildResults(){
