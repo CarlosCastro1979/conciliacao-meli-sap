@@ -438,7 +438,6 @@ function runProcess(){
     const cteVal=cteRaw?.value>0.009 ? +(cteRaw.value.toFixed(2)) : 0;
     const cteNum=cteRaw?.numero||'';
     const forn=cteRaw?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
-    const forn=cteRaw?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
     const konRows=devKon[nf].rows;
     const pags=[...devKon[nf].pags];
     // Data: usar a primeira data disponível no Koncili
