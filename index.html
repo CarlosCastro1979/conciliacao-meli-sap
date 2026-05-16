@@ -272,7 +272,7 @@ function runProcess(){
   log(`  → ${Object.keys(cteIdx).length} CTes`,'ok');prog(30);
 
   // KONCILI INDEX — usa VALOR_PREVISTO, acumula vpTotal por NF inteiroprog(35);
-  const kIdx={},kPags=new Set(),devKon={};
+  const kIdx={},kPags=new Set(),devKon={},kPagToNf={};
   for(const r of S.kon){
     const nf=parseInt(r['NUM_NF']||0);if(!nf)continue;
     const tp=String(r['TP_LANCAMENTO']||'');
@@ -289,6 +289,7 @@ function runProcess(){
     }
     if(!kIdx[nf])kIdx[nf]={vpTotal:0,groups:{},freteKon:0};
     if(validPag)kPags.add(pag);
+    if(validPag)kPagToNf[pag]=nf;
     kIdx[nf].vpTotal+=vp;
     if(tpL.includes('frete')&&!validPag)kIdx[nf].freteKon+=Math.abs(vp);
     if(validPag){
@@ -330,7 +331,12 @@ function runProcess(){
   // GENERATE ROWS
   // Formula: frete_livre = vpTotal − meli_amt (ex: 103.88 − 85.89 = 17.99)
   // K_frete = CTE (fixo). Diferença residual vai para K_comissao.prog(65);
-  const nfs=Object.keys(kIdx).map(Number).filter(n=>sapIdx[n]).sort((a,b)=>a-b);
+  // NFs com pagamento neste extrato Meli
+  const nfsComMeli=new Set();
+  for(const [pid] of Object.entries(mIdx)){
+    if(mIdx[pid].isLib&&kPagToNf[pid])nfsComMeli.add(kPagToNf[pid]);
+  }
+  const nfs=Object.keys(kIdx).map(Number).filter(n=>sapIdx[n]&&nfsComMeli.has(n)).sort((a,b)=>a-b);
   if(!S.failedNFs) S.failedNFs=[];
   const usedFree=new Set();
   let freeUsed=0,adjCount=0;
