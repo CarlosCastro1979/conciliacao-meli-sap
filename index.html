@@ -262,11 +262,14 @@ function runProcess(){
 
   // CTE INDEXprog(25);
   const cteIdx={};
+  const CNPJ_FORN={'3007331001466':3100936,'3007331009793':3100938,'3007331012077':3100937};
   for(const r of S.cte){
     const nf=parseInt(r['NUMERO_NF']||0);if(!nf)continue;
     const cteV=pa(r['VALOR_CTE']||0);
     const cteN=r['NUMERO_CTE']?String(Math.round(pa(r['NUMERO_CTE']))):'';
-    cteIdx[nf]={value:cteV,numero:cteN};
+    const cnpj=String(r['CNPJ_EMISSOR']||'').replace(/\.0$/,'').trim();
+    const fornFromCnpj=CNPJ_FORN[cnpj]||null;
+    cteIdx[nf]={value:cteV,numero:cteN,forn:fornFromCnpj};
   }
 
   log(`  → ${Object.keys(cteIdx).length} CTes`,'ok');prog(30);
@@ -376,7 +379,8 @@ function runProcess(){
       }
       nfRows.push({t:'D',nf,pid:pidParts[0],texto:`BX MELI  NF ${nf}`,v:+(-sapV).toFixed(2),conta:null,cli:'BR00002',cteVal,cteNum,sub:'debito',dt:mDt,adj:false});
       nfRows.push({t:'K',nf,pid:pidParts[0],texto:`BX MELI  NF ${nf} REF COMISSÃO`,v:com,conta:null,cli:null,cteVal,cteNum,sub:'comissao',dt:mDt,adj:false,baseCom:com});
-      nfRows.push({t:'K',nf,pid:pidParts[0],texto:cteNum?`BX MELI  NF ${nf}  FRETE CTE Nº ${cteNum}`:`BX MELI  NF ${nf}  FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,sub:'frete',dt:mDt,adj:false,forn:cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935});
+      const _fr=forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
+      nfRows.push({t:'K',nf,pid:pidParts[0],texto:cteNum?`BX MELI  NF ${nf}  FRETE CTE Nº ${cteNum}`:`BX MELI  NF ${nf}  FRETE`,v:cteVal,conta:null,cli:null,cteVal,cteNum,sub:'frete',dt:mDt,adj:false,forn:_fr,_missingForn:!_fr});
 
       if(freteLivre>0.009){
         const exact=Object.entries(fPool).find(([r,i])=>!usedFree.has(r)&&Math.abs(i.amount-freteLivre)<0.01);
@@ -433,7 +437,7 @@ function runProcess(){
     // freteKon from Koncili is NOT a reliable substitute — real CTE value needs portal lookup
     const cteVal=cteRaw?.value>0.009 ? +(cteRaw.value.toFixed(2)) : 0;
     const cteNum=cteRaw?.numero||'';
-    const forn=cteNum?(CTE_FORN_MAP[cteNum]||3100935):3100935;
+    const forn=cteRaw?.forn||(cteNum?(CTE_FORN_MAP[cteNum]||null):null);
     const konRows=devKon[nf].rows;
     const pags=[...devKon[nf].pags];
     // Data: usar a primeira data disponível no Koncili
@@ -654,6 +658,15 @@ function doExport(){
                   font:{color:{rgb:'FFFFFFFF'},bold:true}};
     }
   }
+  // Style missing fornecedor cells (col 8 = Fornecedor) — red background
+  S.rows.forEach((r,i)=>{
+    if(r._missingForn){
+      const addr=XLSX.utils.encode_cell({r:i+1,c:8});
+      if(!ws[addr])ws[addr]={t:'z',v:''};
+      ws[addr].s={fill:{patternType:'solid',fgColor:{rgb:'FFFF0000'}},
+                  font:{color:{rgb:'FFFFFFFF'},bold:true}};
+    }
+  });
 
   const specialStart=1+S.rows.length;
     for(let si=0;si<S.specialRows.length;si++){
